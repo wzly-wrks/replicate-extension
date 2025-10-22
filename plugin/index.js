@@ -1,16 +1,17 @@
 /**
  * SillyTavern Replicate Server Plugin
  * Provides backend integration with Replicate's API for image generation
+ * ES Module version for SillyTavern with "type": "module"
  */
 
-const fetchImpl = typeof globalThis.fetch === 'function' ? (...args) => globalThis.fetch(...args) : require('node-fetch');
+import fetch from 'node-fetch';
 
 const REPLICATE_API_BASE = 'https://api.replicate.com/v1';
 
-const info = {
+export const info = {
     id: 'replicate',
     name: 'Replicate Integration',
-    description: "Integrates Replicate as a first-class image generation provider for SillyTavern",
+    description: 'Integrates Replicate as a first-class image generation provider for SillyTavern',
 };
 
 const config = {
@@ -19,7 +20,6 @@ const config = {
 };
 
 async function replicateRequest(endpoint, options = {}) {
-    const fetch = await getFetchImplementation();
     const url = `${REPLICATE_API_BASE}${endpoint}`;
     const headers = {
         Authorization: `Bearer ${config.apiKey}`,
@@ -27,7 +27,7 @@ async function replicateRequest(endpoint, options = {}) {
         ...(options.headers ?? {}),
     };
 
-    const response = await fetchImpl(url, {
+    const response = await fetch(url, {
         ...options,
         headers,
     });
@@ -71,7 +71,7 @@ function coerceNumber(value) {
     return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-async function init(router) {
+export async function init(router) {
     console.log('[Replicate Plugin] Initializing...');
 
     router.get('/health', (_req, res) => {
@@ -230,12 +230,6 @@ async function init(router) {
     console.log('  - GET  /api/plugins/replicate/prediction/:id');
 }
 
-async function exit() {
+export async function exit() {
     console.log('[Replicate Plugin] Shutting down...');
 }
-
-module.exports = {
-    info,
-    init,
-    exit,
-};
