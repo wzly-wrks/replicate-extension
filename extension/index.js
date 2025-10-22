@@ -3,9 +3,8 @@
  * Provides UI integration for Replicate image generation
  */
 
-import { extension_settings } from '../../../extensions.js';
-import { eventSource, event_types } from '../../../events.js';
-import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
+import { extension_settings } from '../../extensions.js';
+import { eventSource, event_types, getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
