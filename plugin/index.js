@@ -3,24 +3,11 @@
  * Provides backend integration with Replicate's API for image generation
  */
 
+const fetchImpl = typeof globalThis.fetch === 'function' ? (...args) => globalThis.fetch(...args) : require('node-fetch');
+
 const REPLICATE_API_BASE = 'https://api.replicate.com/v1';
 
-let fetchImplementation;
-
-async function getFetchImplementation() {
-    if (!fetchImplementation) {
-        if (typeof globalThis.fetch === 'function') {
-            fetchImplementation = globalThis.fetch.bind(globalThis);
-        } else {
-            const nodeFetchModule = await import('node-fetch');
-            fetchImplementation = nodeFetchModule.default ?? nodeFetchModule;
-        }
-    }
-
-    return fetchImplementation;
-}
-
-export const info = {
+const info = {
     id: 'replicate',
     name: 'Replicate Integration',
     description: "Integrates Replicate as a first-class image generation provider for SillyTavern",
@@ -31,15 +18,6 @@ const config = {
     defaultModel: 'black-forest-labs/flux-schnell',
 };
 
-function coerceNumber(value) {
-    if (value === undefined || value === null || value === '') {
-        return undefined;
-    }
-
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 async function replicateRequest(endpoint, options = {}) {
     const fetch = await getFetchImplementation();
     const url = `${REPLICATE_API_BASE}${endpoint}`;
@@ -49,7 +27,7 @@ async function replicateRequest(endpoint, options = {}) {
         ...(options.headers ?? {}),
     };
 
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
         ...options,
         headers,
     });
@@ -84,7 +62,16 @@ async function waitForPrediction(predictionId, maxAttempts = 60, interval = 2000
     throw new Error('Prediction timed out');
 }
 
-export async function init(router) {
+function coerceNumber(value) {
+    if (value === undefined || value === null || value === '') {
+        return undefined;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+async function init(router) {
     console.log('[Replicate Plugin] Initializing...');
 
     router.get('/health', (_req, res) => {
@@ -243,15 +230,12 @@ export async function init(router) {
     console.log('  - GET  /api/plugins/replicate/prediction/:id');
 }
 
-export async function exit() {
+async function exit() {
     console.log('[Replicate Plugin] Shutting down...');
 }
 
-const pluginInterface = { info, init, exit };
-
-export default pluginInterface;
-
-// Provide CommonJS compatibility for environments that `require()` plugins
-if (typeof module !== 'undefined') {
-    module.exports = pluginInterface;
-}
+module.exports = {
+    info,
+    init,
+    exit,
+};
