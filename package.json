@@ -1,0 +1,33 @@
+{
+  "name": "sillytavern-replicate-integration",
+  "version": "1.0.0",
+  "description": "Replicate image generation integration for SillyTavern",
+  "main": "plugin/index.js",
+  "scripts": {
+    "test": "echo &quot;No tests specified&quot; && exit 0"
+  },
+  "keywords": [
+    "sillytavern",
+    "replicate",
+    "image-generation",
+    "ai",
+    "plugin",
+    "extension"
+  ],
+  "author": "SillyTavern Community",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  },
+  "peerDependencies": {
+    "express": "^4.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-repo/sillytavern-replicate"
+  },
+  "bugs": {
+    "url": "https://github.com/your-repo/sillytavern-replicate/issues"
+  },
+  "homepage": "https://github.com/your-repo/sillytavern-replicate#readme"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "replicate",
+  "name": "Replicate Integration",
+  "description": "Server plugin for integrating Replicate's image generation API with SillyTavern",
+  "version": "1.0.0",
+  "author": "SillyTavern Community",
+  "main": "index.js"
+}
