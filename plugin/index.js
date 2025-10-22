@@ -3,140 +3,149 @@
  * Provides backend integration with Replicate's API for image generation
  */
 
-import fetch from 'node-fetch';
-
 const REPLICATE_API_BASE = 'https://api.replicate.com/v1';
 
-/**
- * Plugin information
- */
+let fetchImplementation;
+
+async function getFetchImplementation() {
+    if (!fetchImplementation) {
+        if (typeof globalThis.fetch === 'function') {
+            fetchImplementation = globalThis.fetch.bind(globalThis);
+        } else {
+            const module = await import('node-fetch');
+            fetchImplementation = module.default ?? module;
+        }
+    }
+
+    return fetchImplementation;
+}
+
 export const info = {
     id: 'replicate',
     name: 'Replicate Integration',
-    description: 'Integrates Replicate as a first-class image generation provider for SillyTavern'
+    description: "Integrates Replicate as a first-class image generation provider for SillyTavern",
 };
 
-/**
- * Store for API configuration
- */
-let config = {
+const config = {
     apiKey: process.env.REPLICATE_API_TOKEN || '',
-    defaultModel: 'black-forest-labs/flux-schnell'
+    defaultModel: 'black-forest-labs/flux-schnell',
 };
 
-/**
- * Helper function to make authenticated requests to Replicate API
- */
+function coerceNumber(value) {
+    if (value === undefined || value === null || value === '') {
+        return undefined;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 async function replicateRequest(endpoint, options = {}) {
+    const fetch = await getFetchImplementation();
     const url = `${REPLICATE_API_BASE}${endpoint}`;
     const headers = {
-        'Authorization': `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${config.apiKey}`,
         'Content-Type': 'application/json',
-        ...options.headers
+        ...(options.headers ?? {}),
     };
 
     const response = await fetch(url, {
         ...options,
-        headers
+        headers,
     });
 
     if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Replicate API error: ${response.status} - ${error}`);
+        const errorText = await response.text();
+        throw new Error(`Replicate API error: ${response.status} - ${errorText}`);
     }
 
     return response.json();
 }
 
-/**
- * Poll for prediction completion
- */
 async function waitForPrediction(predictionId, maxAttempts = 60, interval = 2000) {
-    for (let i = 0; i < maxAttempts; i++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const prediction = await replicateRequest(`/predictions/${predictionId}`);
-        
+
         if (prediction.status === 'succeeded') {
             return prediction;
-        } else if (prediction.status === 'failed') {
+        }
+
+        if (prediction.status === 'failed') {
             throw new Error(`Prediction failed: ${prediction.error}`);
-        } else if (prediction.status === 'canceled') {
+        }
+
+        if (prediction.status === 'canceled') {
             throw new Error('Prediction was canceled');
         }
-        
-        // Wait before polling again
+
         await new Promise(resolve => setTimeout(resolve, interval));
     }
-    
+
     throw new Error('Prediction timed out');
 }
 
-/**
- * Initialize the plugin
- * @param {import('express').Router} router Express router
- */
 export async function init(router) {
     console.log('[Replicate Plugin] Initializing...');
 
-    // Health check endpoint
-    router.get('/health', (req, res) => {
+    router.get('/health', (_req, res) => {
         res.json({
             status: 'ok',
-            configured: !!config.apiKey,
-            defaultModel: config.defaultModel
+            configured: Boolean(config.apiKey),
+            defaultModel: config.defaultModel,
         });
     });
 
-    // Get/Set API configuration
-    router.get('/config', (req, res) => {
+    router.get('/config', (_req, res) => {
         res.json({
-            configured: !!config.apiKey,
-            defaultModel: config.defaultModel
+            configured: Boolean(config.apiKey),
+            defaultModel: config.defaultModel,
         });
     });
 
     router.post('/config', (req, res) => {
         try {
-            if (req.body.apiKey) {
-                config.apiKey = req.body.apiKey;
+            const body = req.body ?? {};
+            if (typeof body.apiKey === 'string') {
+                config.apiKey = body.apiKey.trim();
             }
-            if (req.body.defaultModel) {
-                config.defaultModel = req.body.defaultModel;
+            if (typeof body.defaultModel === 'string' && body.defaultModel.trim()) {
+                config.defaultModel = body.defaultModel.trim();
             }
+
             res.json({ success: true, message: 'Configuration updated' });
         } catch (error) {
+            console.error('[Replicate Plugin] Failed to update configuration:', error);
             res.status(500).json({ error: error.message });
         }
     });
 
-    // List available models
-    router.get('/models', async (req, res) => {
-        try {
-            if (!config.apiKey) {
-                return res.status(401).json({ error: 'API key not configured' });
-            }
+    router.get('/models', async (_req, res) => {
+        if (!config.apiKey) {
+            return res.status(401).json({ error: 'API key not configured' });
+        }
 
-            // Get popular image generation models
+        try {
             const models = [
                 {
                     id: 'black-forest-labs/flux-schnell',
                     name: 'FLUX.1 Schnell',
-                    description: 'Fast image generation with FLUX.1'
+                    description: 'Fast image generation with FLUX.1',
                 },
                 {
                     id: 'black-forest-labs/flux-dev',
                     name: 'FLUX.1 Dev',
-                    description: 'High-quality image generation with FLUX.1'
+                    description: 'High-quality image generation with FLUX.1',
                 },
                 {
                     id: 'stability-ai/sdxl',
                     name: 'Stable Diffusion XL',
-                    description: 'High-quality text-to-image generation'
+                    description: 'High-quality text-to-image generation',
                 },
                 {
                     id: 'stability-ai/stable-diffusion',
                     name: 'Stable Diffusion',
-                    description: 'Classic Stable Diffusion model'
-                }
+                    description: 'Classic Stable Diffusion model',
+                },
             ];
 
             res.json({ models });
@@ -146,52 +155,51 @@ export async function init(router) {
         }
     });
 
-    // Generate image endpoint
     router.post('/generate', async (req, res) => {
-        try {
-            if (!config.apiKey) {
-                return res.status(401).json({ error: 'API key not configured' });
-            }
+        if (!config.apiKey) {
+            return res.status(401).json({ error: 'API key not configured' });
+        }
 
-            const { prompt, model, width, height, num_outputs, guidance_scale, num_inference_steps } = req.body;
+        try {
+            const body = req.body ?? {};
+            const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
 
             if (!prompt) {
                 return res.status(400).json({ error: 'Prompt is required' });
             }
 
-            const modelToUse = model || config.defaultModel;
+            const modelToUse = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : config.defaultModel;
 
             console.log(`[Replicate Plugin] Generating image with model: ${modelToUse}`);
             console.log(`[Replicate Plugin] Prompt: ${prompt}`);
 
-            // Create prediction
-            const input = {
-                prompt: prompt
-            };
+            const input = { prompt };
+            const width = coerceNumber(body.width);
+            const height = coerceNumber(body.height);
+            const numOutputs = coerceNumber(body.num_outputs);
+            const guidanceScale = coerceNumber(body.guidance_scale);
+            const inferenceSteps = coerceNumber(body.num_inference_steps);
 
-            // Add optional parameters if provided
-            if (width) input.width = width;
-            if (height) input.height = height;
-            if (num_outputs) input.num_outputs = num_outputs;
-            if (guidance_scale) input.guidance_scale = guidance_scale;
-            if (num_inference_steps) input.num_inference_steps = num_inference_steps;
+            if (width !== undefined) input.width = width;
+            if (height !== undefined) input.height = height;
+            if (numOutputs !== undefined) input.num_outputs = numOutputs;
+            if (guidanceScale !== undefined) input.guidance_scale = guidanceScale;
+            if (inferenceSteps !== undefined) input.num_inference_steps = inferenceSteps;
 
             const prediction = await replicateRequest('/predictions', {
                 method: 'POST',
                 body: JSON.stringify({
                     version: modelToUse,
-                    input: input
-                })
+                    input,
+                }),
             });
 
             console.log(`[Replicate Plugin] Prediction created: ${prediction.id}`);
 
-            // Wait for completion
             const completedPrediction = await waitForPrediction(prediction.id);
 
-            console.log(`[Replicate Plugin] Prediction completed successfully`);
+            console.log('[Replicate Plugin] Prediction completed successfully');
 
-            // Extract image URLs from output
             let images = [];
             if (Array.isArray(completedPrediction.output)) {
                 images = completedPrediction.output;
@@ -199,27 +207,24 @@ export async function init(router) {
                 images = [completedPrediction.output];
             }
 
-            // Return in SillyTavern expected format
             res.json({
-                images: images,
-                prompt: prompt,
+                images,
+                prompt,
                 model: modelToUse,
-                predictionId: completedPrediction.id
+                predictionId: completedPrediction.id,
             });
-
         } catch (error) {
             console.error('[Replicate Plugin] Error generating image:', error);
             res.status(500).json({ error: error.message });
         }
     });
 
-    // Get prediction status
     router.get('/prediction/:id', async (req, res) => {
-        try {
-            if (!config.apiKey) {
-                return res.status(401).json({ error: 'API key not configured' });
-            }
+        if (!config.apiKey) {
+            return res.status(401).json({ error: 'API key not configured' });
+        }
 
+        try {
             const prediction = await replicateRequest(`/predictions/${req.params.id}`);
             res.json(prediction);
         } catch (error) {
@@ -236,14 +241,8 @@ export async function init(router) {
     console.log('  - GET  /api/plugins/replicate/models');
     console.log('  - POST /api/plugins/replicate/generate');
     console.log('  - GET  /api/plugins/replicate/prediction/:id');
-
-    return Promise.resolve();
 }
 
-/**
- * Cleanup function called on server shutdown
- */
 export async function exit() {
     console.log('[Replicate Plugin] Shutting down...');
-    return Promise.resolve();
 }
