@@ -19,6 +19,7 @@ const config = {
 };
 
 async function replicateRequest(endpoint, options = {}) {
+    const fetch = await getFetchImplementation();
     const url = `${REPLICATE_API_BASE}${endpoint}`;
     const headers = {
         Authorization: `Bearer ${config.apiKey}`,
