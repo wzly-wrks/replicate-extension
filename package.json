@@ -4,7 +4,7 @@
   "description": "Replicate image generation integration for SillyTavern",
   "main": "plugin/index.js",
   "scripts": {
-    "test": "echo &quot;No tests specified&quot; && exit 0"
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [
     "sillytavern",
