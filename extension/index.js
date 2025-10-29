@@ -1,6 +1,6 @@
 /**
- * SillyTavern Replicate Extension
- * Provides UI integration for Replicate image generation
+ * SillyTavern Replicate Integration
+ * Bridges the Replicate plugin into SillyTavern's primary image generation UI
  */
 
 import { extension_settings } from '../../../extensions.js';
@@ -482,6 +482,38 @@ function init() {
     if (initialized) {
         return;
     }
+}
+
+function patchFetch() {
+    if (fetchPatched || typeof globalThis.fetch !== 'function') {
+        return;
+    }
+
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async function patchedFetch(input, init = {}) {
+        if (isReplicateOverrideActive() && matchesOpenAiEndpoint(input)) {
+            try {
+                const bodyText = typeof init.body === 'string'
+                    ? init.body
+                    : init.body instanceof Blob || init.body instanceof FormData
+                        ? ''
+                        : init.body
+                            ? String(init.body)
+                            : input instanceof Request
+                                ? await input.clone().text()
+                                : '';
+                let payload = {};
+                if (bodyText) {
+                    try {
+                        payload = JSON.parse(bodyText);
+                    } catch (error) {
+                        console.warn('[Replicate Extension] Failed to parse OpenAI override payload:', error);
+                    }
+                }
+                const prompt = String(payload?.prompt ?? '').trim();
+                if (!prompt) {
+                    throw new Error('Prompt is required.');
+                }
 
     initialized = true;
     refreshState();
