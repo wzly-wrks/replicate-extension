@@ -1,17 +1,29 @@
 /**
  * SillyTavern Replicate Server Plugin
  * Provides backend integration with Replicate's API for image generation
- * ES Module version for SillyTavern with "type": "module"
  */
 
-import fetch from 'node-fetch';
-
 const REPLICATE_API_BASE = 'https://api.replicate.com/v1';
+
+let fetchImplementation;
+
+async function getFetchImplementation() {
+    if (!fetchImplementation) {
+        if (typeof globalThis.fetch === 'function') {
+            fetchImplementation = globalThis.fetch.bind(globalThis);
+        } else {
+            const nodeFetchModule = await import('node-fetch');
+            fetchImplementation = nodeFetchModule.default ?? nodeFetchModule;
+        }
+    }
+
+    return fetchImplementation;
+}
 
 export const info = {
     id: 'replicate',
     name: 'Replicate Integration',
-    description: 'Integrates Replicate as a first-class image generation provider for SillyTavern',
+    description: "Integrates Replicate as a first-class image generation provider for SillyTavern",
 };
 
 const config = {
@@ -19,7 +31,17 @@ const config = {
     defaultModel: 'black-forest-labs/flux-schnell',
 };
 
+function coerceNumber(value) {
+    if (value === undefined || value === null || value === '') {
+        return undefined;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 async function replicateRequest(endpoint, options = {}) {
+    const fetch = await getFetchImplementation();
     const url = `${REPLICATE_API_BASE}${endpoint}`;
     const headers = {
         Authorization: `Bearer ${config.apiKey}`,
@@ -60,15 +82,6 @@ async function waitForPrediction(predictionId, maxAttempts = 60, interval = 2000
     }
 
     throw new Error('Prediction timed out');
-}
-
-function coerceNumber(value) {
-    if (value === undefined || value === null || value === '') {
-        return undefined;
-    }
-
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export async function init(router) {
@@ -232,4 +245,13 @@ export async function init(router) {
 
 export async function exit() {
     console.log('[Replicate Plugin] Shutting down...');
+}
+
+const pluginInterface = { info, init, exit };
+
+export default pluginInterface;
+
+// Provide CommonJS compatibility for environments that `require()` plugins
+if (typeof module !== 'undefined') {
+    module.exports = pluginInterface;
 }
