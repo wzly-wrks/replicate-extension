@@ -200,46 +200,15 @@ export async function init(router) {
 
             console.log('[Replicate Plugin] Prediction completed successfully');
 
-            const outputs = Array.isArray(completedPrediction.output)
-                ? completedPrediction.output
-                : typeof completedPrediction.output === 'string'
-                    ? [completedPrediction.output]
-                    : [];
-
-            const images = await Promise.all(outputs.map(async (output, index) => {
-                if (typeof output !== 'string' || !output.startsWith('http')) {
-                    console.warn('[Replicate Plugin] Skipping non-url output payload at index', index);
-                    return null;
-                }
-
-                try {
-                    const fetch = await getFetchImplementation();
-                    const response = await fetch(output);
-
-                    if (!response.ok) {
-                        throw new Error(`Failed to fetch generated image: HTTP ${response.status}`);
-                    }
-
-                    const arrayBuffer = await response.arrayBuffer();
-                    const buffer = Buffer.from(arrayBuffer);
-                    const contentType = response.headers.get('content-type') ?? 'image/png';
-                    const mimeMatch = /image\/(\w+)/i.exec(contentType);
-                    const format = mimeMatch?.[1]?.toLowerCase() ?? 'png';
-
-                    return {
-                        url: output,
-                        base64: buffer.toString('base64'),
-                        mimeType: contentType,
-                        format,
-                    };
-                } catch (error) {
-                    console.error('[Replicate Plugin] Failed to download generated image:', error);
-                    return null;
-                }
-            }));
+            let images = [];
+            if (Array.isArray(completedPrediction.output)) {
+                images = completedPrediction.output;
+            } else if (typeof completedPrediction.output === 'string') {
+                images = [completedPrediction.output];
+            }
 
             res.json({
-                images: images.filter(Boolean),
+                images,
                 prompt,
                 model: modelToUse,
                 predictionId: completedPrediction.id,
