@@ -3,188 +3,93 @@
  * Provides UI integration for Replicate image generation
  */
 
-(function() {
-    'use strict';
+import { extension_settings } from '../../../extensions.js';
+import { eventSource, event_types } from '../../../events.js';
+import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
+import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
+import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
 
-    const MODULE_NAME = 'replicate';
-    const PLUGIN_BASE_URL = '/api/plugins/replicate';
+const MODULE_KEY = 'replicate';
+const PLUGIN_BASE_URL = '/api/plugins/replicate';
+const CONTAINER_ID = 'replicate_container';
+const SETTINGS_PARENTS = ['extensions_settings2', 'extensions_settings'];
 
-    // Extension state
-    let extensionSettings = {
-        apiKey: '',
-        selectedModel: 'black-forest-labs/flux-schnell',
-        width: 1024,
-        height: 1024,
-        num_outputs: 1,
-        guidance_scale: 7.5,
-        num_inference_steps: 50
-    };
+const defaultSettings = {
+    apiKey: '',
+    selectedModel: 'black-forest-labs/flux-schnell',
+    width: 1024,
+    height: 1024,
+    num_outputs: 1,
+    guidance_scale: 7.5,
+    num_inference_steps: 50,
+};
 
-    let availableModels = [];
+let settings;
+let availableModels = [];
+let slashCommandRegistered = false;
+let pendingStatus = null;
+let initialized = false;
 
-    /**
-     * Load extension settings
-     */
-    function loadSettings() {
-        const context = SillyTavern.getContext();
-        if (context.extensionSettings[MODULE_NAME]) {
-            Object.assign(extensionSettings, context.extensionSettings[MODULE_NAME]);
-        } else {
-            context.extensionSettings[MODULE_NAME] = extensionSettings;
-        }
-        console.log('[Replicate Extension] Settings loaded:', extensionSettings);
+function ensureState() {
+    if (!settings) {
+        const existing = extension_settings[MODULE_KEY] ?? {};
+        settings = { ...defaultSettings, ...existing };
+        extension_settings[MODULE_KEY] = settings;
     }
 
-    /**
-     * Save extension settings
-     */
-    function saveSettings() {
-        const context = SillyTavern.getContext();
-        context.extensionSettings[MODULE_NAME] = extensionSettings;
-        context.saveSettingsDebounced();
-        console.log('[Replicate Extension] Settings saved');
-    }
+    return settings;
+}
 
-    /**
-     * Make request to plugin endpoint
-     */
-    async function pluginRequest(endpoint, options = {}) {
-        const url = `${PLUGIN_BASE_URL}${endpoint}`;
-        const response = await fetch(url, {
-            ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            }
-        });
+function refreshState() {
+    const existing = extension_settings[MODULE_KEY] ?? {};
+    settings = { ...defaultSettings, ...existing };
+    extension_settings[MODULE_KEY] = settings;
+    return settings;
+}
 
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Plugin request failed: ${response.status} - ${error}`);
-        }
+function persistState() {
+    saveSettingsDebounced();
+}
 
-        return response.json();
-    }
+function escapeAttribute(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;');
+}
 
-    /**
-     * Check plugin health and configuration
-     */
-    async function checkPluginHealth() {
-        try {
-            const health = await pluginRequest('/health');
-            console.log('[Replicate Extension] Plugin health:', health);
-            return health;
-        } catch (error) {
-            console.error('[Replicate Extension] Plugin health check failed:', error);
-            return null;
+function getSettingsContainer() {
+    return document.getElementById(CONTAINER_ID);
+}
+
+function mountSettingsContainer() {
+    for (const parentId of SETTINGS_PARENTS) {
+        const parent = document.getElementById(parentId);
+        if (parent) {
+            const container = document.createElement('div');
+            container.id = CONTAINER_ID;
+            container.classList.add('extension_container');
+            parent.appendChild(container);
+            return container;
         }
     }
 
-    /**
-     * Update plugin configuration
-     */
-    async function updatePluginConfig() {
-        try {
-            await pluginRequest('/config', {
-                method: 'POST',
-                body: JSON.stringify({
-                    apiKey: extensionSettings.apiKey,
-                    defaultModel: extensionSettings.selectedModel
-                })
-            });
-            console.log('[Replicate Extension] Plugin configuration updated');
-        } catch (error) {
-            console.error('[Replicate Extension] Failed to update plugin config:', error);
-            throw error;
-        }
-    }
+    return null;
+}
 
-    /**
-     * Load available models
-     */
-    async function loadModels() {
-        try {
-            const response = await pluginRequest('/models');
-            availableModels = response.models || [];
-            console.log('[Replicate Extension] Loaded models:', availableModels);
-            updateModelSelect();
-        } catch (error) {
-            console.error('[Replicate Extension] Failed to load models:', error);
-        }
-    }
-
-    /**
-     * Update model select dropdown
-     */
-    function updateModelSelect() {
-        const select = document.getElementById('replicate_model_select');
-        if (!select) return;
-
-        select.innerHTML = '';
-        availableModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = `${model.name} - ${model.description}`;
-            if (model.id === extensionSettings.selectedModel) {
-                option.selected = true;
-            }
-            select.appendChild(option);
-        });
-    }
-
-    /**
-     * Generate image using Replicate
-     */
-    async function generateImage(prompt) {
-        try {
-            console.log('[Replicate Extension] Generating image with prompt:', prompt);
-
-            const response = await pluginRequest('/generate', {
-                method: 'POST',
-                body: JSON.stringify({
-                    prompt: prompt,
-                    model: extensionSettings.selectedModel,
-                    width: extensionSettings.width,
-                    height: extensionSettings.height,
-                    num_outputs: extensionSettings.num_outputs,
-                    guidance_scale: extensionSettings.guidance_scale,
-                    num_inference_steps: extensionSettings.num_inference_steps
-                })
-            });
-
-            console.log('[Replicate Extension] Image generated:', response);
-            return response;
-        } catch (error) {
-            console.error('[Replicate Extension] Image generation failed:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Show status message
-     */
-    function showStatus(message, type = 'info') {
-        const statusDiv = document.getElementById('replicate_status');
-        if (statusDiv) {
-            statusDiv.textContent = message;
-            statusDiv.className = `replicate-status ${type}`;
-        }
-    }
-
-    /**
-     * Create settings HTML
-     */
-    function getSettingsHtml() {
-        return `
-            <div class="replicate-settings">
-                <h3>Replicate Image Generation</h3>
-                
-                <div class="replicate-settings-content">
+function getSettingsHtml(state) {
+    return `
+        <div class="replicate-settings">
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Replicate Image Generation</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content replicate-settings-content">
                     <label for="replicate_api_key">
                         <span>Replicate API Key</span>
-                        <input id="replicate_api_key" class="text_pole" type="password" 
-                               placeholder="Enter your Replicate API token" />
-                        <small>Get your API key from <a href="https://replicate.com/account/api-tokens" target="_blank">replicate.com/account/api-tokens</a></small>
+                        <input id="replicate_api_key" class="text_pole" type="password" placeholder="Enter your Replicate API token" value="${escapeAttribute(state.apiKey)}" />
+                        <small>Get your API key from <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noopener noreferrer">replicate.com/account/api-tokens</a></small>
                     </label>
 
                     <label for="replicate_model_select">
@@ -196,33 +101,28 @@
 
                     <label for="replicate_width">
                         <span>Width</span>
-                        <input id="replicate_width" class="text_pole" type="number" 
-                               min="256" max="2048" step="64" />
+                        <input id="replicate_width" class="text_pole" type="number" min="256" max="2048" step="64" value="${escapeAttribute(state.width)}" />
                     </label>
 
                     <label for="replicate_height">
                         <span>Height</span>
-                        <input id="replicate_height" class="text_pole" type="number" 
-                               min="256" max="2048" step="64" />
+                        <input id="replicate_height" class="text_pole" type="number" min="256" max="2048" step="64" value="${escapeAttribute(state.height)}" />
                     </label>
 
                     <label for="replicate_num_outputs">
                         <span>Number of Images</span>
-                        <input id="replicate_num_outputs" class="text_pole" type="number" 
-                               min="1" max="4" />
+                        <input id="replicate_num_outputs" class="text_pole" type="number" min="1" max="4" value="${escapeAttribute(state.num_outputs)}" />
                     </label>
 
                     <label for="replicate_guidance_scale">
                         <span>Guidance Scale</span>
-                        <input id="replicate_guidance_scale" class="text_pole" type="number" 
-                               min="1" max="20" step="0.5" />
+                        <input id="replicate_guidance_scale" class="text_pole" type="number" min="1" max="20" step="0.5" value="${escapeAttribute(state.guidance_scale)}" />
                         <small>Higher values follow the prompt more closely</small>
                     </label>
 
                     <label for="replicate_num_inference_steps">
                         <span>Inference Steps</span>
-                        <input id="replicate_num_inference_steps" class="text_pole" type="number" 
-                               min="1" max="100" />
+                        <input id="replicate_num_inference_steps" class="text_pole" type="number" min="1" max="100" value="${escapeAttribute(state.num_inference_steps)}" />
                         <small>More steps = higher quality but slower</small>
                     </label>
 
@@ -238,211 +138,379 @@
                     <div id="replicate_status" class="replicate-status"></div>
                 </div>
             </div>
-        `;
+        </div>
+    `;
+}
+
+function showStatus(container, message, type = 'info') {
+    if (!container) {
+        pendingStatus = { message, type };
+        return;
     }
 
-    /**
-     * Bind UI events
-     */
-    function bindUIEvents() {
-        // API Key input
-        const apiKeyInput = document.getElementById('replicate_api_key');
-        if (apiKeyInput) {
-            apiKeyInput.value = extensionSettings.apiKey;
-            apiKeyInput.addEventListener('input', (e) => {
-                extensionSettings.apiKey = e.target.value;
-            });
-        }
-
-        // Model select
-        const modelSelect = document.getElementById('replicate_model_select');
-        if (modelSelect) {
-            modelSelect.addEventListener('change', (e) => {
-                extensionSettings.selectedModel = e.target.value;
-            });
-        }
-
-        // Width input
-        const widthInput = document.getElementById('replicate_width');
-        if (widthInput) {
-            widthInput.value = extensionSettings.width;
-            widthInput.addEventListener('input', (e) => {
-                extensionSettings.width = parseInt(e.target.value);
-            });
-        }
-
-        // Height input
-        const heightInput = document.getElementById('replicate_height');
-        if (heightInput) {
-            heightInput.value = extensionSettings.height;
-            heightInput.addEventListener('input', (e) => {
-                extensionSettings.height = parseInt(e.target.value);
-            });
-        }
-
-        // Num outputs input
-        const numOutputsInput = document.getElementById('replicate_num_outputs');
-        if (numOutputsInput) {
-            numOutputsInput.value = extensionSettings.num_outputs;
-            numOutputsInput.addEventListener('input', (e) => {
-                extensionSettings.num_outputs = parseInt(e.target.value);
-            });
-        }
-
-        // Guidance scale input
-        const guidanceScaleInput = document.getElementById('replicate_guidance_scale');
-        if (guidanceScaleInput) {
-            guidanceScaleInput.value = extensionSettings.guidance_scale;
-            guidanceScaleInput.addEventListener('input', (e) => {
-                extensionSettings.guidance_scale = parseFloat(e.target.value);
-            });
-        }
-
-        // Num inference steps input
-        const numInferenceStepsInput = document.getElementById('replicate_num_inference_steps');
-        if (numInferenceStepsInput) {
-            numInferenceStepsInput.value = extensionSettings.num_inference_steps;
-            numInferenceStepsInput.addEventListener('input', (e) => {
-                extensionSettings.num_inference_steps = parseInt(e.target.value);
-            });
-        }
-
-        // Test connection button
-        const testButton = document.getElementById('replicate_test_connection');
-        if (testButton) {
-            testButton.addEventListener('click', async () => {
-                showStatus('Testing connection...', 'info');
-
-                try {
-                    await updatePluginConfig();
-                    const health = await checkPluginHealth();
-                    
-                    if (health && health.configured) {
-                        showStatus('✓ Connection successful!', 'success');
-                        await loadModels();
-                    } else {
-                        showStatus('✗ API key not configured', 'error');
-                    }
-                } catch (error) {
-                    showStatus(`✗ Connection failed: ${error.message}`, 'error');
-                }
-            });
-        }
-
-        // Save settings button
-        const saveButton = document.getElementById('replicate_save_settings');
-        if (saveButton) {
-            saveButton.addEventListener('click', async () => {
-                showStatus('Saving settings...', 'info');
-
-                try {
-                    await updatePluginConfig();
-                    saveSettings();
-                    showStatus('✓ Settings saved successfully!', 'success');
-                } catch (error) {
-                    showStatus(`✗ Failed to save: ${error.message}`, 'error');
-                }
-            });
-        }
+    const statusElement = container.querySelector('#replicate_status');
+    if (!statusElement) {
+        pendingStatus = { message, type };
+        return;
     }
 
-    /**
-     * Register slash command for image generation
-     */
-    function registerSlashCommand() {
-        if (typeof SlashCommandParser !== 'undefined') {
-            SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-                name: 'replicate',
-                callback: async (args, prompt) => {
-                    try {
-                        const result = await generateImage(prompt);
-                        
-                        // Display images in chat
-                        if (result.images && result.images.length > 0) {
-                            const imageHtml = result.images.map(url => 
-                                `<img src="${url}" alt="Generated image" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" />`
-                            ).join('');
-                            
-                            return `Generated ${result.images.length} image(s):\n${imageHtml}`;
-                        }
-                        
-                        return 'Image generation completed but no images returned.';
-                    } catch (error) {
-                        return `Error generating image: ${error.message}`;
-                    }
-                },
-                returns: 'generated image(s)',
-                namedArgumentList: [],
-                unnamedArgumentList: [
-                    SlashCommandArgument.fromProps({
-                        description: 'the prompt for image generation',
-                        typeList: [ARGUMENT_TYPE.STRING],
-                        isRequired: true
-                    })
-                ],
-                helpString: `
-                    <div>
-                        Generate images using Replicate AI models.
-                    </div>
-                    <div>
-                        <strong>Example:</strong>
-                        <ul>
-                            <li>
-                                <pre><code class="language-stscript">/replicate a beautiful sunset over mountains</code></pre>
-                            </li>
-                        </ul>
-                    </div>
-                `
-            }));
-            
-            console.log('[Replicate Extension] Slash command registered: /replicate');
-        }
-    }
+    statusElement.textContent = message;
+    statusElement.className = `replicate-status ${type}`;
+    pendingStatus = null;
+}
 
-    /**
-     * Initialize extension - This is called by SillyTavern
-     */
-    async function init() {
-        console.log('[Replicate Extension] Initializing...');
-
-        // Load settings
-        loadSettings();
-
-        // Register slash command
-        registerSlashCommand();
-
-        // Check plugin health
-        const health = await checkPluginHealth();
-        if (health && health.configured) {
-            await loadModels();
-        }
-
-        console.log('[Replicate Extension] Initialized successfully');
-    }
-
-    /**
-     * Get settings HTML - This is called by SillyTavern to render the settings panel
-     */
-    function getSettings() {
-        const html = getSettingsHtml();
-        
-        // Use setTimeout to ensure DOM is ready before binding events
-        setTimeout(() => {
-            bindUIEvents();
-        }, 100);
-        
-        return html;
-    }
-
-    // Export functions that SillyTavern expects
-    window.replicate_extension = {
-        init: init,
-        getSettings: getSettings
-    };
-
-    // Also try the jQuery ready approach as fallback
-    jQuery(async () => {
-        await init();
+async function pluginRequest(endpoint, options = {}) {
+    const response = await fetch(`${PLUGIN_BASE_URL}${endpoint}`, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...getRequestHeaders(),
+            ...(options.headers ?? {}),
+        },
     });
 
-})();
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `HTTP ${response.status}`);
+    }
+
+    if (response.status === 204) {
+        return null;
+    }
+
+    return response.json();
+}
+
+async function checkPluginHealth() {
+    const health = await pluginRequest('/health');
+    console.log('[Replicate Extension] Plugin health:', health);
+    return health;
+}
+
+async function updatePluginConfig() {
+    const state = ensureState();
+    await pluginRequest('/config', {
+        method: 'POST',
+        body: JSON.stringify({
+            apiKey: state.apiKey ?? '',
+            defaultModel: state.selectedModel ?? '',
+        }),
+    });
+}
+
+function updateModelSelect(container = getSettingsContainer()) {
+    if (!container) {
+        return;
+    }
+
+    const select = container.querySelector('#replicate_model_select');
+    if (!select) {
+        return;
+    }
+
+    const state = ensureState();
+    select.innerHTML = '';
+
+    if (!availableModels.length) {
+        const option = document.createElement('option');
+        option.value = state.selectedModel || '';
+        option.textContent = availableModels.length === 0 ? 'No models loaded' : state.selectedModel;
+        option.selected = true;
+        select.appendChild(option);
+        select.disabled = availableModels.length === 0;
+        return;
+    }
+
+    select.disabled = false;
+    let hasSelected = false;
+
+    for (const model of availableModels) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = model.description ? `${model.name} – ${model.description}` : model.name;
+        if (model.id === state.selectedModel) {
+            option.selected = true;
+            hasSelected = true;
+        }
+        select.appendChild(option);
+    }
+
+    if (!hasSelected && state.selectedModel) {
+        const option = document.createElement('option');
+        option.value = state.selectedModel;
+        option.textContent = state.selectedModel;
+        option.selected = true;
+        option.dataset.unknown = 'true';
+        select.appendChild(option);
+    }
+}
+
+async function loadModels(container = getSettingsContainer()) {
+    try {
+        const response = await pluginRequest('/models');
+        availableModels = Array.isArray(response?.models) ? response.models : [];
+        updateModelSelect(container ?? getSettingsContainer());
+        if (availableModels.length) {
+            showStatus(container ?? getSettingsContainer(), `Loaded ${availableModels.length} model(s).`, 'success');
+        } else {
+            showStatus(container ?? getSettingsContainer(), 'No models returned by the Replicate plugin.', 'error');
+        }
+    } catch (error) {
+        console.error('[Replicate Extension] Failed to load models:', error);
+        showStatus(container ?? getSettingsContainer(), `Failed to load models: ${error.message}`, 'error');
+    }
+}
+
+function bindUIEvents(container) {
+    const state = ensureState();
+
+    const apiKeyInput = container.querySelector('#replicate_api_key');
+    if (apiKeyInput) {
+        apiKeyInput.value = state.apiKey;
+        apiKeyInput.addEventListener('input', event => {
+            state.apiKey = event.target.value.trim();
+        });
+    }
+
+    const modelSelect = container.querySelector('#replicate_model_select');
+    if (modelSelect) {
+        modelSelect.addEventListener('change', event => {
+            state.selectedModel = event.target.value;
+        });
+    }
+
+    const attachNumberInput = (selector, property, parser = parseInt) => {
+        const input = container.querySelector(selector);
+        if (!input) {
+            return;
+        }
+
+        input.value = state[property];
+        input.addEventListener('change', event => {
+            const parsed = parser(event.target.value);
+            if (Number.isNaN(parsed)) {
+                event.target.value = state[property];
+                return;
+            }
+            state[property] = parsed;
+        });
+    };
+
+    attachNumberInput('#replicate_width', 'width');
+    attachNumberInput('#replicate_height', 'height');
+    attachNumberInput('#replicate_num_outputs', 'num_outputs');
+    attachNumberInput('#replicate_guidance_scale', 'guidance_scale', value => parseFloat(value));
+    attachNumberInput('#replicate_num_inference_steps', 'num_inference_steps');
+
+    const testButton = container.querySelector('#replicate_test_connection');
+    if (testButton) {
+        testButton.addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            showStatus(container, 'Testing connection...', 'info');
+
+            try {
+                await updatePluginConfig();
+                const health = await checkPluginHealth();
+                if (health?.configured) {
+                    showStatus(container, 'Connection successful!', 'success');
+                    await loadModels(container);
+                } else {
+                    showStatus(container, 'API key not configured on the server.', 'error');
+                }
+            } catch (error) {
+                console.error('[Replicate Extension] Connection test failed:', error);
+                showStatus(container, `Connection failed: ${error.message}`, 'error');
+            }
+        });
+    }
+
+    const saveButton = container.querySelector('#replicate_save_settings');
+    if (saveButton) {
+        saveButton.addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            showStatus(container, 'Saving settings...', 'info');
+
+            try {
+                await updatePluginConfig();
+                persistState();
+                showStatus(container, 'Settings saved successfully!', 'success');
+            } catch (error) {
+                console.error('[Replicate Extension] Failed to save settings:', error);
+                showStatus(container, `Failed to save settings: ${error.message}`, 'error');
+            }
+        });
+    }
+}
+
+async function generateImage(prompt) {
+    const trimmedPrompt = (prompt ?? '').trim();
+    if (!trimmedPrompt) {
+        throw new Error('Prompt is required.');
+    }
+
+    const state = ensureState();
+    if (!state.apiKey) {
+        throw new Error('Replicate API key is not configured.');
+    }
+
+    await updatePluginConfig();
+
+    const response = await pluginRequest('/generate', {
+        method: 'POST',
+        body: JSON.stringify({
+            prompt: trimmedPrompt,
+            model: state.selectedModel,
+            width: state.width,
+            height: state.height,
+            num_outputs: state.num_outputs,
+            guidance_scale: state.guidance_scale,
+            num_inference_steps: state.num_inference_steps,
+        }),
+    });
+
+    return response;
+}
+
+function registerSlashCommand() {
+    if (slashCommandRegistered) {
+        return;
+    }
+
+    slashCommandRegistered = true;
+
+    SlashCommandParser.addCommandObject(
+        SlashCommand.fromProps({
+            name: MODULE_KEY,
+            callback: async (_args, prompt) => {
+                try {
+                    const result = await generateImage(prompt);
+                    const images = Array.isArray(result?.images) ? result.images : [];
+
+                    if (!images.length) {
+                        return 'Image generation completed but no images were returned.';
+                    }
+
+                    const html = images
+                        .map(url => `<img src="${url}" alt="Generated image" class="replicate-generated-image" />`)
+                        .join('');
+
+                    return `Generated ${images.length} image(s):\n${html}`;
+                } catch (error) {
+                    console.error('[Replicate Extension] Image generation failed:', error);
+                    return `Error generating image: ${error.message}`;
+                }
+            },
+            returns: 'generated image(s)',
+            namedArgumentList: [],
+            unnamedArgumentList: [
+                SlashCommandArgument.fromProps({
+                    description: 'Prompt for image generation',
+                    typeList: [ARGUMENT_TYPE.STRING],
+                    isRequired: true,
+                }),
+            ],
+            helpString: `
+                <div>Generate images using Replicate models.</div>
+                <div><strong>Example:</strong></div>
+                <div>
+                    <pre><code class="language-stscript">/replicate a beautiful sunset over mountains</code></pre>
+                </div>
+            `,
+        }),
+    );
+
+    console.log('[Replicate Extension] Slash command registered: /replicate');
+}
+
+function renderSettingsInto(container) {
+    if (!container) {
+        return;
+    }
+
+    const state = ensureState();
+    container.innerHTML = getSettingsHtml(state);
+    bindUIEvents(container);
+    updateModelSelect(container);
+
+    if (pendingStatus) {
+        showStatus(container, pendingStatus.message, pendingStatus.type);
+    }
+}
+
+function hydrateSettings() {
+    let container = getSettingsContainer();
+    if (!container) {
+        container = mountSettingsContainer();
+    }
+
+    if (!container) {
+        return;
+    }
+
+    renderSettingsInto(container);
+}
+
+function whenDomReady(callback) {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', callback, { once: true });
+    } else {
+        callback();
+    }
+}
+
+function setupEventHandlers() {
+    eventSource.on(event_types.EXTENSION_SETTINGS_LOADED, () => {
+        refreshState();
+        hydrateSettings();
+    });
+
+    eventSource.on(event_types.APP_READY, () => {
+        const state = ensureState();
+        if (!state.apiKey) {
+            return;
+        }
+
+        void updatePluginConfig()
+            .then(() => loadModels().catch(error => console.error('[Replicate Extension] Failed to load models', error)))
+            .catch(error => console.error('[Replicate Extension] Failed to update plugin config', error));
+    });
+}
+
+function init() {
+    if (initialized) {
+        return;
+    }
+
+    initialized = true;
+    refreshState();
+    registerSlashCommand();
+    setupEventHandlers();
+
+    whenDomReady(() => {
+        hydrateSettings();
+
+        const state = ensureState();
+        if (!state.apiKey) {
+            return;
+        }
+
+        void updatePluginConfig()
+            .then(() => loadModels().catch(error => console.error('[Replicate Extension] Failed to load models', error)))
+            .catch(error => console.error('[Replicate Extension] Failed to update plugin config', error));
+    });
+}
+
+function getSettingsLegacy() {
+    const state = refreshState();
+    whenDomReady(() => hydrateSettings());
+    return getSettingsHtml(state);
+}
+
+init();
+
+globalThis.replicate_extension = {
+    init,
+    getSettings: getSettingsLegacy,
+};
