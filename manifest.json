@@ -1,0 +1,13 @@
+{
+  "display_name": "Replicate Image Generation",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "SillyTavern Community",
+  "version": "1.0.0",
+  "homePage": "https://github.com/wzly-wrks/replicate-extension",
+  "auto_update": true,
+  "description": "Adds Replicate as a first-class image generation provider in SillyTavern with support for FLUX.1, Stable Diffusion XL, and more"
+}
