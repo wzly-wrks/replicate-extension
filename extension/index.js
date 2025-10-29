@@ -1,29 +1,19 @@
 /**
- * SillyTavern Replicate Extension
- * Provides UI integration for Replicate image generation
+ * SillyTavern Replicate Integration
+ * Bridges the Replicate plugin into SillyTavern's primary image generation UI
  */
 
-import { extension_settings, getContext } from '../../../extensions.js';
+import { extension_settings } from '../../../extensions.js';
 import { eventSource, event_types } from '../../../events.js';
-import {
-    addOneMessage,
-    getMessageTimeStamp,
-    getRequestHeaders,
-    saveSettingsDebounced,
-    substituteParamsExtended,
-    systemUserName,
-} from '../../../../script.js';
+import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
-import { ToolManager } from '../../../tool-calling.js';
 
 const MODULE_KEY = 'replicate';
 const PLUGIN_BASE_URL = '/api/plugins/replicate';
 const CONTAINER_ID = 'replicate_container';
-const IMAGE_SETTINGS_CONTAINER_ID = 'sd_container';
-const FALLBACK_SETTINGS_PARENTS = ['extensions_settings', 'extensions_settings2'];
-const MESSAGE_TEMPLATE = 'Generated image with Replicate: {{prompt}}';
+const SETTINGS_PARENTS = ['extensions_settings2', 'extensions_settings'];
 
 const defaultSettings = {
     apiKey: '',
@@ -40,41 +30,25 @@ let availableModels = [];
 let slashCommandRegistered = false;
 let pendingStatus = null;
 let initialized = false;
-let toolRegistered = false;
 
 function ensureState() {
     if (!settings) {
-        const root = extension_settings.sd ?? (extension_settings.sd = {});
-        const legacy = extension_settings[MODULE_KEY];
-        const existing = root.replicate ?? legacy ?? {};
+        const existing = extension_settings[MODULE_KEY] ?? {};
         settings = { ...defaultSettings, ...existing };
-        root.replicate = settings;
-
-        if (legacy) {
-            delete extension_settings[MODULE_KEY];
-        }
+        extension_settings[MODULE_KEY] = settings;
     }
 
     return settings;
 }
 
 function refreshState() {
-    const root = extension_settings.sd ?? (extension_settings.sd = {});
-    const legacy = extension_settings[MODULE_KEY];
-    const existing = root.replicate ?? legacy ?? {};
+    const existing = extension_settings[MODULE_KEY] ?? {};
     settings = { ...defaultSettings, ...existing };
-    root.replicate = settings;
-
-    if (legacy) {
-        delete extension_settings[MODULE_KEY];
-    }
-
+    extension_settings[MODULE_KEY] = settings;
     return settings;
 }
 
 function persistState() {
-    const root = extension_settings.sd ?? (extension_settings.sd = {});
-    root.replicate = { ...settings };
     saveSettingsDebounced();
 }
 
@@ -88,37 +62,19 @@ function getSettingsContainer() {
     return document.getElementById(CONTAINER_ID);
 }
 
-function findSettingsParent() {
-    const imageSettings = document.getElementById(IMAGE_SETTINGS_CONTAINER_ID);
-    if (imageSettings) {
-        return imageSettings;
-    }
-
-    for (const fallbackId of FALLBACK_SETTINGS_PARENTS) {
-        const fallback = document.getElementById(fallbackId);
-        if (fallback) {
-            return fallback;
+function mountSettingsContainer() {
+    for (const parentId of SETTINGS_PARENTS) {
+        const parent = document.getElementById(parentId);
+        if (parent) {
+            const container = document.createElement('div');
+            container.id = CONTAINER_ID;
+            container.classList.add('extension_container');
+            parent.appendChild(container);
+            return container;
         }
     }
 
     return null;
-}
-
-function mountSettingsContainer() {
-    const parent = findSettingsParent();
-    if (!parent) {
-        return null;
-    }
-
-    const container = document.createElement('div');
-    container.id = CONTAINER_ID;
-    container.classList.add('extension_container');
-    if (parent.id === IMAGE_SETTINGS_CONTAINER_ID && parent.firstChild) {
-        parent.insertBefore(container, parent.firstChild);
-    } else {
-        parent.appendChild(container);
-    }
-    return container;
 }
 
 function getSettingsHtml(state) {
@@ -126,7 +82,7 @@ function getSettingsHtml(state) {
         <div class="replicate-settings">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b>Replicate Image Provider</b>
+                    <b>Replicate Image Generation</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content replicate-settings-content">
@@ -240,95 +196,6 @@ async function updatePluginConfig() {
             defaultModel: state.selectedModel ?? '',
         }),
     });
-}
-
-// Normalizes the plugin payload so the existing SillyTavern message helpers can
-// reuse it without special-casing third-party image providers.
-function normalizePluginImage(image) {
-    if (!image || typeof image !== 'object') {
-        return null;
-    }
-
-    const url = typeof image.url === 'string' ? image.url : null;
-    const base64 = typeof image.base64 === 'string' ? image.base64.trim() : '';
-    const format = typeof image.format === 'string' ? image.format : null;
-    const mimeType = typeof image.mimeType === 'string' ? image.mimeType : (format ? `image/${format}` : null);
-
-    let dataUri = null;
-    if (base64) {
-        dataUri = base64.startsWith('data:')
-            ? base64
-            : `data:${mimeType ?? 'image/png'};base64,${base64}`;
-    } else if (url) {
-        dataUri = url;
-    }
-
-    if (!dataUri) {
-        return null;
-    }
-
-    return {
-        url,
-        base64: base64 || null,
-        format: format ?? (mimeType?.split('/')?.[1] ?? null),
-        mimeType: mimeType ?? null,
-        dataUri,
-    };
-}
-
-// Reuse the core SillyTavern chat workflow so Replicate images behave exactly
-// like the built-in providers (swipes, inline previews, saved prompts, etc.).
-async function postImagesToChat(prompt, images, initiator = 'command') {
-    const usableImages = Array.isArray(images) ? images.filter(Boolean) : [];
-    if (!usableImages.length) {
-        throw new Error('Replicate did not return any images.');
-    }
-
-    const dataUris = usableImages.map(image => image.dataUri).filter(Boolean);
-    if (!dataUris.length) {
-        throw new Error('Replicate images were missing data payloads.');
-    }
-
-    const context = getContext();
-    if (!context) {
-        throw new Error('Chat context is not available for Replicate images.');
-    }
-
-    const author = context.groupId ? systemUserName : context.name2;
-    const message = {
-        name: author ?? 'Replicate',
-        is_user: false,
-        is_system: false,
-        send_date: getMessageTimeStamp(),
-        mes: substituteParamsExtended(MESSAGE_TEMPLATE, { prompt }),
-        extra: {
-            image: dataUris[0],
-            image_swipes: dataUris,
-            inline_image: false,
-            title: prompt,
-            generator: MODULE_KEY,
-            replicate: {
-                urls: usableImages.map(image => image.url).filter(Boolean),
-            },
-            initiator,
-            generationType: initiator,
-        },
-    };
-
-    context.chat.push(message);
-    const messageId = context.chat.length - 1;
-    await eventSource.emit(event_types.MESSAGE_RECEIVED, messageId, MODULE_KEY);
-
-    if (typeof context.addOneMessage === 'function') {
-        context.addOneMessage(message);
-    } else {
-        addOneMessage(message);
-    }
-
-    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, MODULE_KEY);
-    await context.saveChat();
-
-    return dataUris;
 }
 
 function updateModelSelect(container = getSettingsContainer()) {
@@ -503,65 +370,7 @@ async function generateImage(prompt) {
         }),
     });
 
-    const images = Array.isArray(response?.images)
-        ? response.images.map(normalizePluginImage).filter(Boolean)
-        : [];
-
-    return {
-        ...response,
-        images,
-    };
-}
-
-// Register Replicate as the "GenerateImage" function-tool so SillyTavern's
-// global image-generation toggle continues to work even when the default
-// provider is disabled.
-function ensureImageToolRegistered(force = false) {
-    if (toolRegistered && !force) {
-        return;
-    }
-
-    try {
-        ToolManager.registerFunctionTool({
-            name: 'GenerateImage',
-            displayName: 'Generate Image (Replicate)',
-            description: [
-                'Generate an image from a text prompt using Replicate.',
-                'Use when a user asks to imagine, draw, or render a visual.',
-            ].join(' '),
-            parameters: Object.freeze({
-                $schema: 'http://json-schema.org/draft-04/schema#',
-                type: 'object',
-                properties: {
-                    prompt: {
-                        type: 'string',
-                        description: 'The text prompt to turn into an image.',
-                    },
-                },
-                required: ['prompt'],
-            }),
-            action: async args => {
-                const prompt = String(args?.prompt ?? '').trim();
-                if (!prompt) {
-                    throw new Error('Prompt is required for Replicate image generation.');
-                }
-
-                const result = await generateImage(prompt);
-                const images = Array.isArray(result?.images) ? result.images : [];
-                if (!images.length) {
-                    throw new Error('Replicate did not return any images.');
-                }
-
-                await postImagesToChat(prompt, images, 'tool');
-                return `Generated ${images.length} Replicate image(s).`;
-            },
-            formatMessage: () => 'Generating an image with Replicate…',
-        });
-        toolRegistered = true;
-    } catch (error) {
-        toolRegistered = false;
-        console.error('[Replicate Extension] Failed to register image generation tool:', error);
-    }
+    return response;
 }
 
 function registerSlashCommand() {
@@ -583,10 +392,8 @@ function registerSlashCommand() {
                         return 'Image generation completed but no images were returned.';
                     }
 
-                    await postImagesToChat(prompt, images, 'command');
-
                     const html = images
-                        .map(image => `<img src="${image.dataUri}" alt="Generated image" class="replicate-generated-image" />`)
+                        .map(url => `<img src="${url}" alt="Generated image" class="replicate-generated-image" />`)
                         .join('');
 
                     return `Generated ${images.length} image(s):\n${html}`;
@@ -634,16 +441,6 @@ function renderSettingsInto(container) {
 
 function hydrateSettings() {
     let container = getSettingsContainer();
-    const preferredParent = findSettingsParent();
-
-    if (container && preferredParent && container.parentElement !== preferredParent && preferredParent.id === IMAGE_SETTINGS_CONTAINER_ID) {
-        if (preferredParent.firstChild) {
-            preferredParent.insertBefore(container, preferredParent.firstChild);
-        } else {
-            preferredParent.appendChild(container);
-        }
-    }
-
     if (!container) {
         container = mountSettingsContainer();
     }
@@ -664,19 +461,12 @@ function whenDomReady(callback) {
 }
 
 function setupEventHandlers() {
-    const reapplyToolIntegration = () => ensureImageToolRegistered(true);
-
     eventSource.on(event_types.EXTENSION_SETTINGS_LOADED, () => {
         refreshState();
         hydrateSettings();
-        ensureImageToolRegistered(true);
     });
 
-    eventSource.on(event_types.SETTINGS_LOADED, reapplyToolIntegration);
-    eventSource.on(event_types.SETTINGS_UPDATED, reapplyToolIntegration);
-
     eventSource.on(event_types.APP_READY, () => {
-        ensureImageToolRegistered();
         const state = ensureState();
         if (!state.apiKey) {
             return;
@@ -692,11 +482,42 @@ function init() {
     if (initialized) {
         return;
     }
+}
+
+function patchFetch() {
+    if (fetchPatched || typeof globalThis.fetch !== 'function') {
+        return;
+    }
+
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async function patchedFetch(input, init = {}) {
+        if (isReplicateOverrideActive() && matchesOpenAiEndpoint(input)) {
+            try {
+                const bodyText = typeof init.body === 'string'
+                    ? init.body
+                    : init.body instanceof Blob || init.body instanceof FormData
+                        ? ''
+                        : init.body
+                            ? String(init.body)
+                            : input instanceof Request
+                                ? await input.clone().text()
+                                : '';
+                let payload = {};
+                if (bodyText) {
+                    try {
+                        payload = JSON.parse(bodyText);
+                    } catch (error) {
+                        console.warn('[Replicate Extension] Failed to parse OpenAI override payload:', error);
+                    }
+                }
+                const prompt = String(payload?.prompt ?? '').trim();
+                if (!prompt) {
+                    throw new Error('Prompt is required.');
+                }
 
     initialized = true;
     refreshState();
     registerSlashCommand();
-    ensureImageToolRegistered(true);
     setupEventHandlers();
 
     whenDomReady(() => {
