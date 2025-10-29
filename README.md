@@ -60,8 +60,7 @@ This integration consists of two components:
            └── extensions/
                └── replicate/
                    ├── index.js
-                   ├── manifest.json
-                   └── style.css
+                   └── manifest.json
    ```
 
    Or for all users:
@@ -73,8 +72,7 @@ This integration consists of two components:
                └── third-party/
                    └── replicate/
                        ├── index.js
-                       ├── manifest.json
-                       └── style.css
+                       └── manifest.json
    ```
 
 ### Step 4: Restart SillyTavern
@@ -91,24 +89,30 @@ Restart your SillyTavern server to load the plugin and extension.
 ### 2. Configure the Extension
 
 1. Open SillyTavern
-2. Go to **Extensions** > **Replicate Image Generation**
-3. Enter your Replicate API token
-4. Click **Test Connection** to verify
-5. Select your preferred model
+2. Go to **Extensions** > **Stable Diffusion**
+3. In the **Source** dropdown, select "replicate"
+4. Enter your Replicate API token in the extension settings
+5. Select your preferred model from the model dropdown
 6. Adjust generation settings as needed
-7. Click **Save Settings**
 
 ## Usage
 
-### Using the Slash Command
+### Using the Integrated Image Generation System
 
-Generate images directly from chat:
+After installation, Replicate will appear as an option in SillyTavern's existing image generation system:
 
-```
-/replicate a beautiful sunset over mountains with vibrant colors
-```
+1. Open SillyTavern
+2. Go to **Extensions** > **Stable Diffusion**
+3. In the **Source** dropdown, select "replicate"
+4. Configure your Replicate API key in the extension settings
+5. Select your preferred model from the model dropdown
+6. Adjust generation settings as needed
+7. Use the existing image generation UI or slash commands:
+   - Magic wand icon in chat messages
+   - `/sd` slash command with various arguments (e.g., `/sd you`, `/sd face`, `/sd scene`)
+   - Function calling if enabled
 
-The generated image(s) will appear in the chat.
+The Replicate extension no longer provides its own separate UI, as it now integrates fully with SillyTavern's existing image generation framework.
 
 ### Using the API Directly
 
@@ -270,6 +274,17 @@ For issues and questions:
 - Check the [SillyTavern Documentation](https://docs.sillytavern.app)
 - Visit the [SillyTavern Discord](https://discord.gg/sillytavern)
 - Review [Replicate Documentation](https://replicate.com/docs)
+
+## Testing
+
+To test the integration:
+
+1. Ensure both the plugin and extension are properly installed
+2. Restart SillyTavern to load the new components
+3. Go to **Extensions** > **Stable Diffusion**
+4. Select "replicate" from the source dropdown
+5. Configure your API key in the extension settings
+6. Try generating an image using the magic wand icon or `/sd` slash command
 
 ## Changelog
 
