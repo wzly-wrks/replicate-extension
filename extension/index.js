@@ -12,6 +12,8 @@ import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/Sla
 
 const MODULE_KEY = 'replicate';
 const PLUGIN_BASE_URL = '/api/plugins/replicate';
+const CONTAINER_ID = 'replicate_container';
+const SETTINGS_PARENTS = ['extensions_settings2', 'extensions_settings'];
 
 const defaultSettings = {
     apiKey: '',
@@ -26,6 +28,8 @@ const defaultSettings = {
 let settings;
 let availableModels = [];
 let slashCommandRegistered = false;
+let pendingStatus = null;
+let initialized = false;
 
 function ensureState() {
     if (!settings) {
@@ -54,9 +58,28 @@ function escapeAttribute(value) {
         .replace(/"/g, '&quot;');
 }
 
+function getSettingsContainer() {
+    return document.getElementById(CONTAINER_ID);
+}
+
+function mountSettingsContainer() {
+    for (const parentId of SETTINGS_PARENTS) {
+        const parent = document.getElementById(parentId);
+        if (parent) {
+            const container = document.createElement('div');
+            container.id = CONTAINER_ID;
+            container.classList.add('extension_container');
+            parent.appendChild(container);
+            return container;
+        }
+    }
+
+    return null;
+}
+
 function getSettingsHtml(state) {
     return `
-        <div id="replicate_container" class="extension_container replicate-settings">
+        <div class="replicate-settings">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
                     <b>Replicate Image Generation</b>
@@ -120,13 +143,20 @@ function getSettingsHtml(state) {
 }
 
 function showStatus(container, message, type = 'info') {
-    const statusElement = container?.querySelector('#replicate_status');
+    if (!container) {
+        pendingStatus = { message, type };
+        return;
+    }
+
+    const statusElement = container.querySelector('#replicate_status');
     if (!statusElement) {
+        pendingStatus = { message, type };
         return;
     }
 
     statusElement.textContent = message;
     statusElement.className = `replicate-status ${type}`;
+    pendingStatus = null;
 }
 
 async function pluginRequest(endpoint, options = {}) {
@@ -166,10 +196,6 @@ async function updatePluginConfig() {
             defaultModel: state.selectedModel ?? '',
         }),
     });
-}
-
-function getSettingsContainer() {
-    return document.getElementById('replicate_container');
 }
 
 function updateModelSelect(container = getSettingsContainer()) {
@@ -223,23 +249,19 @@ async function loadModels(container = getSettingsContainer()) {
     try {
         const response = await pluginRequest('/models');
         availableModels = Array.isArray(response?.models) ? response.models : [];
-        updateModelSelect(container);
+        updateModelSelect(container ?? getSettingsContainer());
         if (availableModels.length) {
-            showStatus(container, `Loaded ${availableModels.length} model(s).`, 'success');
+            showStatus(container ?? getSettingsContainer(), `Loaded ${availableModels.length} model(s).`, 'success');
         } else {
-            showStatus(container, 'No models returned by the Replicate plugin.', 'error');
+            showStatus(container ?? getSettingsContainer(), 'No models returned by the Replicate plugin.', 'error');
         }
     } catch (error) {
         console.error('[Replicate Extension] Failed to load models:', error);
-        showStatus(container, `Failed to load models: ${error.message}`, 'error');
+        showStatus(container ?? getSettingsContainer(), `Failed to load models: ${error.message}`, 'error');
     }
 }
 
-function bindUIEvents(container = getSettingsContainer()) {
-    if (!container) {
-        return;
-    }
-
+function bindUIEvents(container) {
     const state = ensureState();
 
     const apiKeyInput = container.querySelector('#replicate_api_key');
@@ -402,34 +424,46 @@ function registerSlashCommand() {
     console.log('[Replicate Extension] Slash command registered: /replicate');
 }
 
-function scheduleSettingsBinding() {
-    window.requestAnimationFrame(() => {
-        const container = getSettingsContainer();
-        if (!container) {
-            window.setTimeout(scheduleSettingsBinding, 50);
-            return;
-        }
+function renderSettingsInto(container) {
+    if (!container) {
+        return;
+    }
 
-        bindUIEvents(container);
-        updateModelSelect(container);
-    });
+    const state = ensureState();
+    container.innerHTML = getSettingsHtml(state);
+    bindUIEvents(container);
+    updateModelSelect(container);
+
+    if (pendingStatus) {
+        showStatus(container, pendingStatus.message, pendingStatus.type);
+    }
 }
 
-function getSettings() {
-    const state = refreshState();
-    const html = getSettingsHtml(state);
+function hydrateSettings() {
+    let container = getSettingsContainer();
+    if (!container) {
+        container = mountSettingsContainer();
+    }
 
-    window.setTimeout(() => {
-        scheduleSettingsBinding();
-    }, 0);
+    if (!container) {
+        return;
+    }
 
-    return html;
+    renderSettingsInto(container);
+}
+
+function whenDomReady(callback) {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', callback, { once: true });
+    } else {
+        callback();
+    }
 }
 
 function setupEventHandlers() {
     eventSource.on(event_types.EXTENSION_SETTINGS_LOADED, () => {
         refreshState();
-        scheduleSettingsBinding();
+        hydrateSettings();
     });
 
     eventSource.on(event_types.APP_READY, () => {
@@ -445,25 +479,38 @@ function setupEventHandlers() {
 }
 
 function init() {
+    if (initialized) {
+        return;
+    }
+
+    initialized = true;
     refreshState();
     registerSlashCommand();
     setupEventHandlers();
 
-    scheduleSettingsBinding();
+    whenDomReady(() => {
+        hydrateSettings();
 
-    const state = ensureState();
-    if (!state.apiKey) {
-        return;
-    }
+        const state = ensureState();
+        if (!state.apiKey) {
+            return;
+        }
 
-    void updatePluginConfig()
-        .then(() => loadModels().catch(error => console.error('[Replicate Extension] Failed to load models', error)))
-        .catch(error => console.error('[Replicate Extension] Failed to update plugin config', error));
+        void updatePluginConfig()
+            .then(() => loadModels().catch(error => console.error('[Replicate Extension] Failed to load models', error)))
+            .catch(error => console.error('[Replicate Extension] Failed to update plugin config', error));
+    });
 }
 
-window.replicate_extension = {
-    init,
-    getSettings,
-};
+function getSettingsLegacy() {
+    const state = refreshState();
+    whenDomReady(() => hydrateSettings());
+    return getSettingsHtml(state);
+}
 
 init();
+
+globalThis.replicate_extension = {
+    init,
+    getSettings: getSettingsLegacy,
+};
